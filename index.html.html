@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Thaís Gonçalves | Psicóloga & Neuropsicóloga</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root {
+      --beige: #F5F1EA;
+      --brown: #8B6F47;
+      --black: #000000;
+      --pink-projeto: #C93C7A;
+    }
+    html {
+      scroll-behavior: smooth;
+    }
+    body {
+      font-family: 'Manrope', sans-serif;
+      background-color: var(--beige);
+      color: var(--black);
+    }
+    h1, h2, h3, h4 {
+      font-family: 'Cormorant Garamond', serif;
+    }
+    .btn-primary {
+      background-color: var(--brown);
+      color: white;
+      transition: all 0.3s ease;
+    }
+    .btn-primary:hover {
+      background-color: #7a5f3d;
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(139, 111, 71, 0.2);
+    }
+    .section-divider {
+      width: 80px;
+      height: 2px;
+      background: var(--brown);
+      margin: 0 auto;
+    }
+    .card-hover {
+      transition: all 0.4s ease;
+    }
+    .card-hover:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+    }
+    .icon-box {
+      background: linear-gradient(135deg, rgba(139, 111, 71, 0.1), rgba(139, 111, 71, 0.05));
+      border: 1px solid rgba(139, 111, 71, 0.2);
+    }
+    .nav-link {
+      position: relative;
+    }
+    .nav-link::after {
+      content: '';
+      position: absolute;
+      width: 0;
+      height: 1px;
+      bottom: -4px;
+      left: 0;
+      background-color: var(--brown);
+      transition: width 0.3s ease;
+    }
+    .nav-link:hover::after {
+      width: 100%;
+    }
+    .projeto-card {
+      border: 2px solid var(--pink-projeto);
+      background: linear-gradient(135deg, rgba(201, 60, 122, 0.03), rgba(201, 60, 122, 0.01));
+    }
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .animate-fade-up {
+      animation: fadeInUp 0.8s ease forwards;
+    }
+  </style>
+</head>
+<body class="antialiased">
+
+  <!-- Hidden images for JS preload if needed -->
+  <img id="logo-thaís" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIbGNtcwIQAABtbnRyUkdCIFhZWiAH4gADABQACQAOAB1hY3NwTVNGVAAAAABzYXdzY3RybAAAAAAAAAAAAAAAAAAA9tYAAQAAAADTLWhhbmSdkQA9QICwPUB0LIGepSKOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAABxjcHJ0AAABDAAAAAx3dHB0AAABGAAAABRyWFlaAAABLAAAABRnWFlaAAABQAAAABRiWFlaAAABVAAAABRyVFJDAAABaAAAAGBnVFJDAAABaAAAAGBiVFJDAAABaAAAAGBkZXNjAAAAAAAAAAV1UkdCAAAAAAAAAAAAAAAAdGV4dAAAAABDQzAAWFlaIAAAAAAAAPNUAAEAAAABFslYWVogAAAAAAAAb6AAADjyAAADj1hZWiAAAAAAAABilgAAt4kAABjaWFlaIAAAAAAAACSgAAAPhQAAtsRjdXJ2AAAAAAAAACoAAAB8APgBnAJ1A4MEyQZOCBIKGAxiDvQRzxT2GGocLiBDJKwpai5+M+s5sz/WRldNNlR2XBdkHWyGdVZ+jYgskjacq6eMstu+mcrH12Xkd/H5////2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAZUBDgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDR60lFFIApKWkoAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigApaKKACkpaKACiikoAWiiigAooooAKKKKACiiigAooooAKKKKACiiigApKWigBKWiigApKWigBKKKWgBKKKKACiiigAooopgFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFJS0lABRRRQAUUUUAFFFFABRRRQAUUUUAJRS0UAJRRRQAUUUUAFFFFABSUtFACUUUUAFFFFABRRRQAlFFFABRRRQAUUUUAFJS0lABRRRQAUUUUAFJS0UAJRRRQAUUUUAJRS0lABRRRQAUlLSUAFJS0UgEopaSgAooooASiiigApKWigBKKKKYFyikopAFFFFABRRS0AJRS0lABRRS0AJRS0UAJRS0UAJS0UUAJS0UUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAJS0UUAJS0UUAJRS0UAJRS0UwEopaSgAopaKAEooooAKKKKACiiigAooooAKKKKAEpaKKACkpaKAEooooAKKKKACiiigAooooASilooASiiigAooooAKSlooASilooASiiigAooooAKSlooASiiigAooooAKSlooASiiigAooooAKSlooASiiigAooooASilopAJRRRQAUlLSd6ACiiigBKKWkoAKSlooASiiigBKKKKALdFFFABRS0UAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFLRQAlFLSUAFFFFABRS0lABRS0UAJRRRQAUUtFACUUUUAFFFFABRRRQAUUUUAFFFFMAooooAKKKKACiiigAooooAKKKKAEpaKKACkpaKAEopaSgAooooAKKKKACiiigApKWigApKWigBKKWkoAKKKKACiiigApKWigBKKWkoAKKKKACiiigApKWigBKKKKACiiigApKWigBKKKKACiiigAooooASiiigAooooASilooASiiigAooopAJRRRQAUUUUAJRRRQAUUUUAJRRRQAlFLSUAJRS0UAWqWkpaACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKWgBKWiigBKWikoAKKKWgAooooAKKKKACkpaKACiiigAooooAKKKKAEpaKKACkpaKACiiigBKKWkoAKKKKACiiigAooopgFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFACUUUtACUUtJQAUUUUAFFFFABRRRQAUUUUAFFFFACUUtJQAUUUUAFFFFABSUtFACUUUUAFFFFABRRRQAUlLRQAlFLSUAFFFFABRRRQAlFFFABRRRQAUlLRQAlFFFABSUtFACUUtJQAUUUUAFFFFIBKKKKACkpaSgAooooASilpKACkpaSgAooooAtUtFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFLQAlFLRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFJS0UwEoopaAEooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigBKKWigBKKKKACiiigAooooAKKKKAEpaKKAEopaSgAooooAKKKKACkpaKAEooooAKKKKACiiigBKKWigBKKKKACiiigBKKWigBKKWkoAKKKKAEopaSgAooooAKSlooASiiigAooooASiiikAUUUUAJRS0lABRRRQAlFFFACUUUUAW6KKKACiiigAooooAKKKWgBKKKKACiiloASloooASloooASloooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKYBRRRQAUUUUAJRS0UAJRS0UAJRS0UAJRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAlLRRQAlFLRQAlFFFABRRRQAUUUUAJRS0UAJRRRQAUUUUAFFFFACUUtJQAUUUUAFFFFABSUtFACUUtJQAUUUUAFJS0UAJRRRQAUUUUAFJS0lABRRRQAUlLRQAlFFFABRRRQAlFFFIAooooASiiigApKWkoAKKKKALVFFFABRRRQAUtFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUtJQAUUUUAFFFFABRRRQAUUtJQAUUUUAFFLRQAlFFFABRRS0AJRRRQAUUUUAFFFFMAooooAKKKKACiiigAooooAKKKKACkpaKAEopaKAEopaSgAooooAKKKKACiiigAooooAKKKKACiiigBKKWkoAKKKKACiiigAooooASilpKACiiigAooooAKKKKACkpaSgAooooAKKKKACiiigApKWigBKKKKACkpaKAEooooAKKKKACkpaSgAooooAKSlpKACiiigApKWikAlFFFABSUtFACUUUUAJRRRQBaooooAKKKWgAopKWgAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiloASiiigAooooAKKKKACiiloAKKKKACiiigAooooASloooAKSlooAKKKKACiiigBKKWigAooooASiiigAooooAKKKKACiiimAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUlLRQAlFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFACUUtJQAUUUUAFFFFABRRRQAlFFFABRRRQAUUUUAFFFFABSUtJQAUUUUAFFFFABRRRQAlFFFABRRRQAUlLRQAlFFFABSUtFACUUUUAFFFFACUUUUAFFFFIApKWkoAKKKKAEooooASilooAs0UUUALRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUtFACUtJRQAtFJS0AFFFFACUUtFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABSUtFACUUUUAFFLRQAlFLRQAUlFL1oASilpKACiiigAooooAKKKKACiiimAUUUUAFJS0UAJS0UUAJRRRQAUUUUAFFFFABRRRQAUUUUAFFFFACUUtJQAUUUUAFFFFABRRRQAUlLSUAFFLSUAFFFFABRRRQAUlFFABRRRQAUUUUAFJS0UAJRRRQAUUUUAJRRRQAUUUUAJRS0lABRRRQAUlLRQAlFFFABSUtJSAKKKKACkpaSgAooooAs0tJS0AFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFLRSUALRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRQBSgZNACUlOIA6mo2kRBlm/SgB1FU5dQgi+87flVZtbth3f8qANWisn+3rbHRvyp8et2r45bJ9qANOlqvFdwyDIJ/KrIAPegBKKXFIaAEooooAKKKKACiiigAooopgFJS0lABRRRQAUUUUAFFFFABRRRQAUlLRQAlFFFABRRRQAUUUUAFFFFABSUtFACUUUUAFFFFABRRRQAUlLSUAFFFFABRRRQAlFFFABRRRQAUlLSUAFFFFABSUtJQAUUUUAFFFFABSUUUAFFFFACUUUUgCkpaSgAooooAs0UtFABRRRQAUUUUAFFFFABRRRQAUUUUAFLRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUlAfHXFUb3VbW1U7pFLD+EcmgC8WCjJOB61RudWs7bO+UE46CuevtenmLLC5RD04xWQ8jynMjFj70Ab194k3Dbbq49SSKx5tTupfvTP+dQYHejb7UANaWRjksx+poGe+aeFFPAWmBHnHY05SDjFSbAR2NIEAakA6OeSL7ucfWtSy1cq48xmB471mgDNBjXtwaAO1tryOZAQ2DjpVjcOxrh0vZoQNspB6dasR6zdLjEpP1FAHYZpa56018fKLjn1IWte3v7e4AMbjJ7GgC1RQGBFFABRRRQAUUUUwCkpaKACkpaKAEooooAKKWkoAKKKKACiiigBKKWigBKKWkoAKKKKACiiigAooooASilpKACiiigAooooAKKKKAEooooAKKKKACkpaKAEooooAKSlooASiiigAooooAKSlpKACiiigApKWkoAKKKKACkpaSkAUlLRQAlFFFAFqiiigAooooAKKKKACilpKACloooAKKKKAEpaKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKWigBKKKKAClApKTzNoNACnIqC4uooF3SuqemT1qlqerJZrgMrSEfdrlbu8mvG3TEcdMCgDQv9fuHZkt8IoP3h1NY00ksp3OzMx65NHekOBTAaMgcjmlA9TSFu1JuoAeMelPyKiGT3pygjpQBICPSn7VxxTQ2OtKSAuR1oAa25fuk4pFk+bmmM/NNJycikBYZ8NgGmiY55qMKSalFu2N2DQAyQ5UEVGrsPpTz0we1JtJHXNAEiMGxzzViKaaFg0TkH61VUdsVKpK9OlMDodP1snCXO0Eng9K3kYOMqQfpXC7gRzV7T9TltDg4ZDjr2oA64gjrSVDb3UdzGGjcN64qbNIAooooAKKKKYBRRRQAUUUUAJRS0UAJRRRQAUUUUAFFFFABRRRQAUlLRQAlFFFABRRRQAUUUUAJRS0lABRRRQAUUUUAFJS0UAJRRRQAUUUUAJRS0lABRRRQAUlLRQAlFFFABSUtFACUUUUAFFFFACUUUUgCkpaKAEooooASiiigC1RRRQAUUUtACUUtFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUtFACUUtJQAtJRS0AJRRRQAUtJRQAUUtFABSUtFACUtJS0AFFFFACUdaKQnAoARyB0rC1jVxbgxRgMxHrRrmqiGN7eMsJD3rlwS2S3JPc0AKzM7F3OSfU0BfWkUDqaRjQAM2elRk5oJ54oA560wEwTS45pw69aNw6GgBdo9aevHHemHkUKDnk0gHM+flNMDEHFSFc9aniti2DxzRcZU2EtVmG3LY/wAK0oLNUHmOBgd6V7qGEMEQk/SkAyK0RULt/Kq9xLjgDimzXrS/3hVcsXPTn60wIWGWqSNCKcE7ninhPTrTEGNw2kfjS7SnI5ApQCBzyKcOeRQADaw4pNmO9KQCcjg0uRnBoAktLuS0m3pzxgjPBrq7C9jvYwy8HGSM9K45gccc0+1uXtp1kQkY6gd6AO570VR069S8gVhnd3Bq8OlIAooopgFFFFABRRRQAUUUUAFJS0lABRRRQAUUUUgCiiigAooopgFJS0UAJRRRSAKKKKACiiigApKWkpgFFFFABRRRQAUlLRQAlFFFABRRSUAFFFFABRRRQAlFLSUAFFFFACUUUUAFFFFACUUtJSAKKKKAEooooASiiigC1RRRQAUUUtABRRRQIKKKKBhRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUtJS0AJS0lFABRRRQAUtFFACUtFFABRRRQAUUUUAJS0UUAJRS0UAFFFFABRRRQAUUUUAFFFFABRRSUAL/DWTrOqJbQuit+8PAA7Veu7lLaDe7Ac1w17cvdXTyOxO48fSgBksjTStI5yW55poGfpQemKUAhcfnQA1sduBUTn3qSVgoqABnPegBR7DNOCFjwKmit2Par9vadMrScilFszlt5CelOW0c9RW2loM/dqUWYx93mp5iuQxY7JycEDirKWJIxj68Vqx2mDytTrBxhV5pcw1Ax47ItJ93irhjVFwi5Yegq+IABwtKkGDkgZpcw+QyJ0l2HOfpms2aKTdkg11EluDyUB96pz26g/6uqUhOJzwBT7wNOVgOlXp7dCeFOapSRMnRapMzaJA4IxijGeV4qFX7NSkkcgnFUIm3Y65oJVuRUXmdjS5HY0APBx16GlPNRiQdGoDbe/FAEqsAeRSMOM03rgg05Tn/CgCaxumtLhZFJwOoHcV11jeR3lsroee47g1xTLg5HSr2l37WcyqW/dsfmFAHX0lIjrIoZCCDTiMGkAlFFFABRRRTAKKKKACiiikAUUUUAFFFFACUUUUAFFFFMAooopAJRS0UAJRRRQAUUUUAFFFFMApKWigBKKKKQBSUtFMBKKKKACiiigApKWigBKKKKACkpaKAEooooAKSlooASiiigApKWikAlFFFABSUtJQAUUUUAWaKKKAFooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAClpKWgBKKWkoAWikpaAEpaKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKDQAUUUUAFFFFACUx329elSDGeaxNev/s0IUFdzZ4/CgDJ1zVHnlaCNhtDc4rHzzSAk5Y9TSjlhQA9AScmpMcc0ijFJM21cdzQBXkPmP7VZt4M9RSW0O7k5rUtofrUtmkYjobZQBx2q9DbgY4p8ceMVZRaxbNkiNYR6VMkY7inqKkVaRQwRinCMCngU6pGM2DHSgxjFPxTgKAIQnao5IlPVat4pCtVcVjKltYyc4xWbPAFOGSugliBzxVKWA4z1qlIiUTm57cKeBxUe0georYntcZ4NZk0JQkitUzFxKjnHsabvI71JIM9uaiK+lUQOEm7rgGlD9jyKhI9KUGmBaViOPyp4ODkH61UBwMCpkfOM0AWM5HFMbikVsHGeDSkAgjrQBu6DqRz9nlcH5vlJ610BOTzXBRuY3Dr95Tmu0sbtbuAOCO2cfSkBZopRSUAFFFFABRRRTAKKKKQBRRRQAUUUUAJRS0lABRRRQAUUUUAFFFFABSUtFACUUUUAFFFFABRRRQAlFLSUAFFFFACUUUUwCiiigAooooASilpKACiiigBKKKKACiiigBKKKKACiiikAlFFFABSUtJQAUUUUAWaWkpaACiiigAooooAKKKKACiiigAooooAKKKKACiiigApaSigBaSlooEFFFFABRRRQAUUUUDCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoNFNkbnA6mgCG4mEcZY9BXC6nctdTlvQnvnvXRa9diKNUAOWBxXLetACL0qSMd6jGTwKmHFMBwqJ/mkAqRm2oTTbZS7j60mNK7NCzj3DNasEfFQWkXy4rRiTArBs6UhypxUyimqKkAqChQKkApqipAKBgooIpwoxSAAtKq04DipFXpTFcbs4pMY7VOEpdmOKdhXKrJxxVfy8g1oFetQOmDmkFzKuItyY9DWXcx46jg10LxZYsO9U7i1DJkVaYmrnL3EXJxVJwVY10F3a7ecCsy5tjywrVMwlEzs7uelJinvGVNNNUQGc9aUHFNozTAnR9ygGpEbjFVVbBFTK+cEUATZyM961NBvPIuGjP3Xx396yQ3JNOyUYMDyOaAPQF5HFFV9NuhcWwYDnAz+VWKQCUUUUwCiiikAUUUUAFFFFABRRRQAUUUUAJRS0UAJRRRQAUUUUAFFFFACUUtJQAUUUUAFFFFABSUtJQAUUUUAFFFFMBKKWkoAKKKKACkoooAKKKKACkpaKAEooooAKSlpKACiiigBKKWkpAFJS0UAJRRRQBZpaKKACiiigAooooAKKKKACiiigAooooAKKKWgBKKKKACilooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigBDxUUxwhJ9Oae5GcVmazdGG1f5sErxQBzmsXHn3QxnCiqAGeKC+58nmlHAoAEGDntUi9KbjC04DFMCOdsDFWrBOh96pSHdLgetadkuMfWokXBGxbD5TV1RxVO36VbU1ibolAp6jmmA09aRQ8CnimrTxSGKKeBTR1p4oEOUc4qVRzUa1InXNMRKOnFBHqKUe9KcVRJGRUTDPWpz+lRsKTBFV0PaoWUj8atsKiIpFIzriEOCMDmse6iaJ2VhlTXRTR5BI61UkiV1Icc9KqLFJHMXEIIyuOlZ8iFTzW7dW/lthRWbKiuOnIrVMwkigeelJTnUqelNqiA705Tim9aOlMCdWwfrU6fMMVUB4qaN+QfzoA6Tw1MVeSFifUV0NcXYXBguBIDjqK7GNw6hgeCM0APpKWikAlFLRQAlFFFABRRRQAUUUUAFFFFABRRRQAUlLSUAFFFFMAooopAFFFFACUUtJQAUUUUAFJS0UAJRRRQAUUUUAFJS0lABRRRTAKSlpKACiiigAooooASiiigApKWkoAKKKKACkpaSkAUUUUAJRRRQBaopKWgAooooAKKKKACiiigAooooAKKKKACiiigApaSloAKSlooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACkPApaY54OO1AEcjYz9a5bxBdM0oj3ZG3muhupfLiZj2Ga4u8kM05b27UAQr196eBk4pgPepolycntTAGAyBQ3AJ9qBy9En3WNAEMS7psmtW1XGPrWfbryDWrbJxz61nJmsUaMA+WrSDmoIBxVpeayNR4FSLTQKevWkUh4pwpop4FIY4U4U0U/PFMQ5akSo161Mg5oQmPHSnCgDJpcVRIxqjNTEcZqNhSBEJphFTFajIpFELqOc1UnjIBK81dkHWoj92gNzCucPz3xWLdoytleK6HUoMHfGD0rDuSMA/n7VrFmM0ZrEP9ahIwammXDZWojWhkJ70vWkHBooAUU9GwaZQeopgXY3I6Guu0m6861QZBZV5ri0Y4re8OXGLh4zjBWgDqOqg0UdAAKKQBRRSUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUlABRRRQAUUUUAFFFFABSUtJQAUUUUAFFFFACUUtJQAUUUUwCkpaSgAooooAKSlpKACiiigAooooASiiigApKWigBKKKKACiiikAlFFFACUUtFAFmiiigAooooAKKKKACiiigAooooAKKKKACiiigApaKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoooJwKAEPtTJOEP5U8Cq9y+2Pjr2oAx9cm2wlAeSAK5ckk/WtrWmKls9WFYooAT2qdBtWoUG5vpU54FMBqffJpZDkY9aVOhNMY/OBSYyxbJ0Fa0CYqlZxZCVqxIB3rJmyJ4V4qwgpkYGKlBAqC0x4pwpmRTlNBRKtOFRqakzSAcKVTkU3rShsDmgCVTzU8Zzms8zqvWom1aGDJbJ/CqSJZs9Bmm5HrXOXHiVQCI4ST7nFZ02uXMr5Rdv/AjVWIudi0gGearPdonBOfxrlG1OdzhuvsxqRJ3l43dPrQ4hzHTrcxueD+tSkgjNcuBLGd3B/Gr9rqBjYBwSPrUuJVzTeozTxIssYdehpjNzUspEE0YdSK5zUrco3A657V0561BPbrMOacXYJK5wzKVba1QsCDXQ6lpLIu5SCM1gyoUJB9a2Tuc8o2I+1JS4xRiqIAc0hoHWlNMB0Rzmr2mTeXcqw9CDWfGcNU0RxIcUAeiRsHiUj0p9UtIm86wiPcDFXaQBRRRQAUlLRQAlFLSUwCiiikAUUUUAFFFFABSUtFABSUtJQAUUUUAFFFFABSUtJQAUUUUAFFFFABRRRQAlFFFABSUtJTAKKKKACiiigBKKKKACiiigApKKKACkpaKAEoooo
